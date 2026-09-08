@@ -1,0 +1,21 @@
+{
+  "name": "grok-build-app",
+  "description": "Grok Build Windows desktop app installer",
+  "owner": {
+    "name": "Jon Brooks",
+    "url": "https://github.com/jonyb21"
+  },
+  "plugins": [
+    {
+      "name": "grok-build-app",
+      "description": "Windows desktop app wrapper for Grok Build with designed icon and shortcuts",
+      "category": "productivity",
+      "source": {
+        "type": "local",
+        "path": "./"
+      },
+      "homepage": "https://github.com/jonyb21/grok-build-app",
+      "keywords": ["grok-build", "desktop", "windows", "installer"]
+    }
+  ]
+}

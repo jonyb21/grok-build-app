@@ -1,0 +1,22 @@
+{
+  "name": "grok-build-app",
+  "displayName": "Grok Build App",
+  "description": "Windows desktop app wrapper for Grok Build: designed spark icon, GrokBuild.exe launcher, Desktop and Start Menu shortcuts. Use when asked to install the Grok Build app from GitHub.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Jon Brooks",
+    "url": "https://github.com/jonyb21"
+  },
+  "homepage": "https://github.com/jonyb21/grok-build-app",
+  "repository": "https://github.com/jonyb21/grok-build-app",
+  "license": "MIT",
+  "keywords": [
+    "grok-build",
+    "grok",
+    "desktop",
+    "installer",
+    "windows",
+    "shortcut",
+    "icon"
+  ]
+}
