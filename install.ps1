@@ -52,62 +52,64 @@ function Find-Csc {
     throw "csc.exe not found. Install .NET Framework 4.x developer tools (comes with Windows)."
 }
 
-function New-IcoFromPng {
-    param(
-        [Parameter(Mandatory = $true)][string]$PngPath,
-        [Parameter(Mandatory = $true)][string]$IcoPath,
-        [int[]]$Sizes = @(16, 20, 24, 32, 40, 48, 64, 128, 256)
-    )
-    Add-Type -AssemblyName System.Drawing
-    $src = [System.Drawing.Bitmap]::FromFile($PngPath)
-    try {
-        $frames = New-Object 'System.Collections.Generic.List[byte[]]'
-        foreach ($sz in $Sizes) {
-            $bmp = New-Object System.Drawing.Bitmap $sz, $sz, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            try {
-                $g.Clear([System.Drawing.Color]::Transparent)
-                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-                $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-                $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-                $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-                $g.DrawImage($src, 0, 0, $sz, $sz)
-            } finally {
-                $g.Dispose()
-            }
-            $ms = New-Object System.IO.MemoryStream
-            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-            $frames.Add($ms.ToArray())
-            $bmp.Dispose()
-            $ms.Dispose()
-        }
-    } finally {
-        $src.Dispose()
+function Apply-LiveConsoleIcon([string]$IcoPath) {
+    $applyCs = @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class GrokLiveIcon {
+    const int WM_SETICON = 0x0080, ICON_SMALL = 0, ICON_BIG = 1;
+    const int IMAGE_ICON = 1, LR_LOADFROMFILE = 0x0010;
+    const int GCLP_HICON = -14, GCLP_HICONSM = -34;
+    const int SM_CXICON = 11, SM_CXSMICON = 49;
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc lp, IntPtr l);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadImage(IntPtr i, string n, int t, int cx, int cy, int f);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", EntryPoint = "SetClassLongPtrW")] static extern IntPtr SetClassLongPtr(IntPtr h, int i, IntPtr v);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int n);
+    public static int Apply(string ico) {
+        int big = GetSystemMetrics(SM_CXICON); if (big <= 0) big = 32;
+        int small = GetSystemMetrics(SM_CXSMICON); if (small <= 0) small = 16;
+        IntPtr hi = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, big, big, LR_LOADFROMFILE);
+        IntPtr lo = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, small, small, LR_LOADFROMFILE);
+        if (hi == IntPtr.Zero) return -1;
+        if (lo == IntPtr.Zero) lo = hi;
+        int n = 0;
+        EnumWindows((h, _) => {
+            if (!IsWindowVisible(h)) return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            string name = "";
+            try { name = Process.GetProcessById(unchecked((int)pid)).ProcessName; } catch { return true; }
+            var sb = new StringBuilder(512);
+            GetWindowText(h, sb, 512);
+            string title = sb.ToString();
+            bool mine = name.Equals("GrokBuild", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("grok", StringComparison.OrdinalIgnoreCase)
+                || title.IndexOf("Grok Build", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!mine) return true;
+            SendMessage(h, WM_SETICON, (IntPtr)ICON_BIG, hi);
+            SendMessage(h, WM_SETICON, (IntPtr)ICON_SMALL, lo);
+            SetClassLongPtr(h, GCLP_HICON, hi);
+            SetClassLongPtr(h, GCLP_HICONSM, lo);
+            n++;
+            return true;
+        }, IntPtr.Zero);
+        return n;
     }
-
-    $fs = [System.IO.File]::Open($IcoPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
-    $bw = New-Object System.IO.BinaryWriter $fs
+}
+'@
     try {
-        $bw.Write([int16]0)
-        $bw.Write([int16]1)
-        $bw.Write([int16]$frames.Count)
-        $offset = 6 + (16 * $frames.Count)
-        for ($i = 0; $i -lt $frames.Count; $i++) {
-            $sz = $Sizes[$i]
-            $bw.Write([byte]($(if ($sz -lt 256) { $sz } else { 0 })))
-            $bw.Write([byte]($(if ($sz -lt 256) { $sz } else { 0 })))
-            $bw.Write([byte]0)
-            $bw.Write([byte]0)
-            $bw.Write([int16]1)
-            $bw.Write([int16]32)
-            $bw.Write([int32]$frames[$i].Length)
-            $bw.Write([int32]$offset)
-            $offset += $frames[$i].Length
-        }
-        foreach ($data in $frames) { $bw.Write($data) }
-    } finally {
-        $bw.Dispose()
-        $fs.Dispose()
+        Add-Type -TypeDefinition $applyCs -ErrorAction Stop
+        $n = [GrokLiveIcon]::Apply($IcoPath)
+        Write-Step "Applied icon to $n live window(s)"
+    } catch {
+        Write-Step "Live icon apply skipped: $($_.Exception.Message)"
     }
 }
 
@@ -271,9 +273,12 @@ if (-not $SkipCli) {
 }
 
 Write-Step 'Installing designed app icon'
-Copy-Item -Force $PngSrc $PngDst
-New-IcoFromPng -PngPath $PngDst -IcoPath $IcoDst
+$buildIcons = Join-Path $RepoRoot 'scripts\Build-Icons.ps1'
+if (-not (Test-Path $buildIcons)) { throw "Missing $buildIcons" }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $buildIcons -SourcePng $PngSrc -OutPng $PngDst -OutIco $IcoDst
+if ($LASTEXITCODE -ne 0) { throw "Build-Icons.ps1 failed (exit $LASTEXITCODE)" }
 Write-Step "ICO written: $IcoDst ($((Get-Item $IcoDst).Length) bytes)"
+Apply-LiveConsoleIcon $IcoDst
 
 Write-Step 'Building GrokBuild.exe'
 $csc = Find-Csc

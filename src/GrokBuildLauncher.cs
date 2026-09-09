@@ -36,12 +36,13 @@ internal static class Program
 
             AllocConsole();
             SetConsoleTitle(WindowTitle);
+            LoadAppIcons();
 
             IntPtr hwnd = GetConsoleWindow();
             if (hwnd != IntPtr.Zero)
             {
                 ApplyWindowAppId(hwnd);
-                TrySetConsoleIcon(hwnd);
+                ApplyIcon(hwnd);
                 ShowWindow(hwnd, SW_SHOWNORMAL);
             }
 
@@ -65,6 +66,7 @@ internal static class Program
                         return 1;
                     }
 
+                    int childId = child.Id;
                     var titleKeeper = new Thread(() =>
                     {
                         try
@@ -72,9 +74,7 @@ internal static class Program
                             while (!child.HasExited)
                             {
                                 SetConsoleTitle(WindowTitle);
-                                IntPtr console = GetConsoleWindow();
-                                if (console != IntPtr.Zero)
-                                    TrySetConsoleIcon(console);
+                                ApplyIconToOwnedWindows(childId);
                                 Thread.Sleep(750);
                             }
                         }
@@ -158,16 +158,69 @@ internal static class Program
         }
     }
 
-    private static void TrySetConsoleIcon(IntPtr hwnd)
+    private static IntPtr _iconBig = IntPtr.Zero;
+    private static IntPtr _iconSmall = IntPtr.Zero;
+
+    private static string IconPath()
     {
-        string ico = Path.Combine(
+        string home = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             @".grok\grok-build.ico");
+        if (File.Exists(home)) return home;
+        try
+        {
+            string beside = Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), "grok-build.ico");
+            if (File.Exists(beside)) return beside;
+        }
+        catch { }
+        return home;
+    }
+
+    private static void LoadAppIcons()
+    {
+        string ico = IconPath();
         if (!File.Exists(ico)) return;
-        IntPtr icon = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
-        if (icon == IntPtr.Zero) return;
-        SendMessage(hwnd, WM_SETICON, (IntPtr)ICON_BIG, icon);
-        SendMessage(hwnd, WM_SETICON, (IntPtr)ICON_SMALL, icon);
+        int big = GetSystemMetrics(SM_CXICON);
+        int small = GetSystemMetrics(SM_CXSMICON);
+        if (big <= 0) big = 32;
+        if (small <= 0) small = 16;
+        _iconBig = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, big, big, LR_LOADFROMFILE);
+        _iconSmall = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, small, small, LR_LOADFROMFILE);
+        if (_iconBig == IntPtr.Zero)
+            _iconBig = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+        if (_iconSmall == IntPtr.Zero)
+            _iconSmall = _iconBig;
+        if (_iconBig != IntPtr.Zero)
+            SetConsoleIcon(_iconBig);
+    }
+
+    private static void ApplyIcon(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || _iconBig == IntPtr.Zero) return;
+        SendMessage(hwnd, WM_SETICON, (IntPtr)ICON_BIG, _iconBig);
+        SendMessage(hwnd, WM_SETICON, (IntPtr)ICON_SMALL, _iconSmall != IntPtr.Zero ? _iconSmall : _iconBig);
+        SetClassLongPtr(hwnd, GCLP_HICON, _iconBig);
+        SetClassLongPtr(hwnd, GCLP_HICONSM, _iconSmall != IntPtr.Zero ? _iconSmall : _iconBig);
+        ApplyWindowAppId(hwnd);
+    }
+
+    private static void ApplyIconToOwnedWindows(int childPid)
+    {
+        IntPtr console = GetConsoleWindow();
+        if (console != IntPtr.Zero) ApplyIcon(console);
+        if (_iconBig != IntPtr.Zero) SetConsoleIcon(_iconBig);
+
+        int self = Process.GetCurrentProcess().Id;
+        EnumWindows((h, _) =>
+        {
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            int id = unchecked((int)pid);
+            if (id != self && id != childPid) return true;
+            if (!IsWindowVisible(h)) return true;
+            ApplyIcon(h);
+            return true;
+        }, IntPtr.Zero);
     }
 
     private static string EscapeArgs(string[] args)
@@ -208,6 +261,10 @@ internal static class Program
     private const int IMAGE_ICON = 1;
     private const int LR_LOADFROMFILE = 0x0010;
     private const int LR_DEFAULTSIZE = 0x0040;
+    private const int GCLP_HICON = -14;
+    private const int GCLP_HICONSM = -34;
+    private const int SM_CXICON = 11;
+    private const int SM_CXSMICON = 49;
     private const ushort VT_LPWSTR = 31;
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -257,6 +314,15 @@ internal static class Program
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetClassLongPtrW")]
+    private static extern IntPtr SetClassLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetConsoleIcon(IntPtr hIcon);
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
